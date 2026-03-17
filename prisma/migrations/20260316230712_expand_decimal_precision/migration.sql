@@ -1,0 +1,5 @@
+-- AlterTable
+ALTER TABLE "PriceHistory" ALTER COLUMN "rate" SET DATA TYPE DECIMAL(20,8);
+
+-- AlterTable
+ALTER TABLE "RawService" ALTER COLUMN "rate" SET DATA TYPE DECIMAL(20,8);

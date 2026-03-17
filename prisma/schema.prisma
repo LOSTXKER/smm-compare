@@ -1,0 +1,126 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Provider {
+  id           String        @id @default(cuid())
+  name         String
+  slug         String        @unique
+  apiUrl       String
+  apiKey       String
+  isOwner      Boolean       @default(false)
+  currency     String        @default("THB")
+  active       Boolean       @default(true)
+  services     RawService[]
+  healthChecks HealthCheck[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model RawService {
+  id           String               @id @default(cuid())
+  providerId   String
+  provider     Provider             @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  externalId   String
+  name         String
+  category     String
+  type         String
+  rate         Decimal              @db.Decimal(20, 8)
+  min          Int
+  max          Int
+  refill       Boolean              @default(false)
+  cancel       Boolean              @default(false)
+  normalized   NormalizedAttribute?
+  groupId      String?
+  group        ServiceGroup?        @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  priceHistory PriceHistory[]
+  lastSyncedAt DateTime             @default(now())
+  createdAt    DateTime             @default(now())
+
+  @@unique([providerId, externalId])
+  @@index([groupId])
+  @@index([providerId])
+}
+
+model NormalizedAttribute {
+  id               String     @id @default(cuid())
+  serviceId        String     @unique
+  service          RawService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  platform         String
+  serviceType      String
+  quality          String?
+  speed            String?
+  refillDays       Int?
+  geoTarget        String?
+  durationMinutes  Int?
+  watchDurationSec Int?
+  extra            Json?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  @@index([platform, serviceType])
+}
+
+model ServiceGroup {
+  id          String       @id @default(cuid())
+  label       String
+  platform    String
+  serviceType String
+  quality     String?
+  refillDays  Int?
+  services    RawService[]
+  verified    Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([platform, serviceType])
+}
+
+model PriceHistory {
+  id         String     @id @default(cuid())
+  serviceId  String
+  service    RawService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  rate       Decimal    @db.Decimal(20, 8)
+  recordedAt DateTime   @default(now())
+
+  @@index([serviceId, recordedAt])
+}
+
+model HealthCheck {
+  id         String   @id @default(cuid())
+  providerId String
+  provider   Provider @relation(fields: [providerId], references: [id], onDelete: Cascade)
+  status     String
+  responseMs Int?
+  errorMsg   String?
+  checkedAt  DateTime @default(now())
+
+  @@index([providerId, checkedAt])
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  name      String
+  role      String   @default("admin")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  baseCurrency String
+  currency     String
+  rate         Decimal  @db.Decimal(16, 8)
+  updatedAt    DateTime @updatedAt
+  createdAt    DateTime @default(now())
+
+  @@unique([baseCurrency, currency])
+}
