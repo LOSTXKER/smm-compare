@@ -288,6 +288,11 @@ export async function syncProviderWithProgress(
     }
   }
 
+  await prisma.provider.update({
+    where: { id: provider.id },
+    data: { lastSyncedAt: new Date() },
+  });
+
   return {
     providerId: provider.id,
     providerName: provider.name,

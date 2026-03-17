@@ -40,6 +40,7 @@ interface Provider {
   isOwner: boolean;
   currency: string;
   active: boolean;
+  lastSyncedAt: string | null;
   _count: { services: number };
   healthChecks: { status: string; responseMs: number | null }[];
 }
@@ -315,6 +316,7 @@ export default function ProvidersPage() {
                   <TableHead>สกุลเงิน</TableHead>
                   <TableHead className="text-center">บริการ</TableHead>
                   <TableHead className="text-center">สถานะ</TableHead>
+                  <TableHead>ซิงค์ล่าสุด</TableHead>
                   <TableHead className="text-right">จัดการ</TableHead>
                 </TableRow>
               </TableHeader>
@@ -397,6 +399,11 @@ function ProviderRow({
             <span className="ml-1 text-xs">({responseMs}ms)</span>
           )}
         </Badge>
+      </TableCell>
+      <TableCell className="text-sm text-muted-foreground">
+        {provider.lastSyncedAt
+          ? formatRelativeTime(provider.lastSyncedAt)
+          : "ยังไม่เคย"}
       </TableCell>
       <TableCell className="text-right">
         <div className="flex justify-end gap-2">
@@ -588,4 +595,17 @@ function ProviderForm({
       </div>
     </form>
   );
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "เมื่อสักครู่";
+  if (mins < 60) return `${mins} นาทีที่แล้ว`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} ชั่วโมงที่แล้ว`;
+  const days = Math.floor(hours / 24);
+  return `${days} วันที่แล้ว`;
 }

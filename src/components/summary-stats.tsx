@@ -19,6 +19,10 @@ interface Stats {
     cheapestProvider: string;
     diffPercent: number;
   }[];
+  nextAutoSync: {
+    providerName: string;
+    lastSyncedAt: string | null;
+  } | null;
 }
 
 export function SummaryStats() {
@@ -74,33 +78,68 @@ export function SummaryStats() {
     },
   ];
 
+  const syncInfo = stats.nextAutoSync;
+  const lastSyncText = syncInfo?.lastSyncedAt
+    ? formatRelativeTime(syncInfo.lastSyncedAt)
+    : "ยังไม่เคย";
+
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-      {statCards.map((stat) => (
-        <Card key={stat.title}>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              {stat.title}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div
-              className={cn(
-                "text-2xl font-bold",
-                stat.highlight === "green" && "text-green-500",
-                stat.highlight === "red" && "text-red-500"
-              )}
-            >
-              {stat.value}
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">{stat.sub}</p>
-          </CardContent>
-        </Card>
-      ))}
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {statCards.map((stat) => (
+          <Card key={stat.title}>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">
+                {stat.title}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div
+                className={cn(
+                  "text-2xl font-bold",
+                  stat.highlight === "green" && "text-green-500",
+                  stat.highlight === "red" && "text-red-500"
+                )}
+              >
+                {stat.value}
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">{stat.sub}</p>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+      {syncInfo && (
+        <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+          </span>
+          <span>
+            ซิงค์อัตโนมัติทุก 1 ชั่วโมง
+            {" \u00b7 "}
+            ถัดไป: <strong>{syncInfo.providerName}</strong>
+            {" \u00b7 "}
+            ซิงค์ล่าสุด: {lastSyncText}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
 
 function cn(...classes: (string | boolean | undefined)[]) {
   return classes.filter(Boolean).join(" ");
+}
+
+function formatRelativeTime(dateStr: string): string {
+  const now = Date.now();
+  const then = new Date(dateStr).getTime();
+  const diffMs = now - then;
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1) return "เมื่อสักครู่";
+  if (mins < 60) return `${mins} นาทีที่แล้ว`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} ชั่วโมงที่แล้ว`;
+  const days = Math.floor(hours / 24);
+  return `${days} วันที่แล้ว`;
 }

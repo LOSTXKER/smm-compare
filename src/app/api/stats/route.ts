@@ -2,10 +2,15 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  const [totalProviders, totalServices, totalGroups] = await Promise.all([
+  const [totalProviders, totalServices, totalGroups, oldestSyncProvider] = await Promise.all([
     prisma.provider.count({ where: { active: true } }),
     prisma.rawService.count(),
     prisma.serviceGroup.count(),
+    prisma.provider.findFirst({
+      where: { active: true },
+      orderBy: { lastSyncedAt: { sort: "asc", nulls: "first" } },
+      select: { name: true, lastSyncedAt: true },
+    }),
   ]);
 
   const groups = await prisma.serviceGroup.findMany({
@@ -93,5 +98,11 @@ export async function GET() {
     cheaperCount,
     moreExpensiveCount,
     topExpensive: expensiveList,
+    nextAutoSync: oldestSyncProvider
+      ? {
+          providerName: oldestSyncProvider.name,
+          lastSyncedAt: oldestSyncProvider.lastSyncedAt?.toISOString() ?? null,
+        }
+      : null,
   });
 }

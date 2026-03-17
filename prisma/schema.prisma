@@ -18,6 +18,7 @@ model Provider {
   active       Boolean       @default(true)
   services     RawService[]
   healthChecks HealthCheck[]
+  lastSyncedAt DateTime?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 }
