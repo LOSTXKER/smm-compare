@@ -17,6 +17,7 @@ import {
   Coins,
   UserCog,
   LogOut,
+  Settings,
 } from "lucide-react";
 import { useCurrency } from "./currency-provider";
 import { signOut, useSession } from "next-auth/react";
@@ -38,6 +39,7 @@ const adminSection = {
     { href: "/admin/sync", label: "ซิงค์ข้อมูล", icon: RefreshCw },
     { href: "/admin/pricing", label: "แนะนำราคา", icon: DollarSign },
     { href: "/admin/users", label: "จัดการผู้ใช้", icon: UserCog },
+    { href: "/admin/settings", label: "ตั้งค่าระบบ", icon: Settings },
   ],
 };
 

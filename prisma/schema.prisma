@@ -132,6 +132,12 @@ model SyncLog {
   @@index([createdAt])
 }
 
+model SystemConfig {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 model ExchangeRate {
   id           String   @id @default(cuid())
   baseCurrency String

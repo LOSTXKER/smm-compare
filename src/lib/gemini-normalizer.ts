@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { getConfigInt, getConfig } from "./config";
 
 export interface NormalizedServiceData {
   externalId: string;
@@ -34,8 +35,8 @@ export interface ServiceInput {
   category: string;
 }
 
-const BATCH_TIMEOUT_MS = 90_000;
-const CONCURRENCY = 2;
+const DEFAULT_BATCH_TIMEOUT_MS = 90_000;
+const DEFAULT_CONCURRENCY = 2;
 const COOLDOWN_AFTER_TIMEOUT_MS = 3_000;
 const COOLDOWN_BETWEEN_CHUNKS_MS = 1_500;
 
@@ -55,7 +56,8 @@ function raceTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 async function processSingleBatch(
   model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
   batch: ServiceInput[],
-  batchLabel: string
+  batchLabel: string,
+  timeoutMs: number = DEFAULT_BATCH_TIMEOUT_MS
 ): Promise<{ results: NormalizedServiceData[]; timedOut: boolean }> {
   const input = batch.map((s) => ({
     externalId: s.externalId,
@@ -69,7 +71,7 @@ async function processSingleBatch(
   try {
     const result = await raceTimeout(
       model.generateContent(prompt, { signal: controller.signal }),
-      BATCH_TIMEOUT_MS,
+      timeoutMs,
       batchLabel
     );
     const text = result.response.text();
@@ -84,13 +86,14 @@ async function processSingleBatch(
   }
 }
 
-export function createModel() {
+export async function createModel() {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
+  const modelName = await getConfig("ai_model", "gemini-2.5-flash");
   const genAI = new GoogleGenerativeAI(apiKey);
   return genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: modelName,
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0.1,
@@ -100,28 +103,35 @@ export function createModel() {
 
 export async function normalizeServices(
   services: ServiceInput[],
-  batchSize = 25,
+  batchSize?: number,
   onProgress?: (completed: number, total: number) => void,
   onBatchResult?: (results: NormalizedServiceData[]) => Promise<void>,
   onLog?: (message: string) => void
 ): Promise<NormalizedServiceData[]> {
-  const model = createModel();
+  const [model, resolvedBatchSize, concurrency, timeoutMs] = await Promise.all([
+    createModel(),
+    batchSize !== undefined ? Promise.resolve(batchSize) : getConfigInt("ai_batch_size", 25),
+    getConfigInt("ai_concurrency", DEFAULT_CONCURRENCY),
+    getConfigInt("ai_timeout_sec", 90).then((v) => v * 1000),
+  ]);
+
+  const effectiveTimeoutMs = timeoutMs || DEFAULT_BATCH_TIMEOUT_MS;
 
   const batches: { batch: ServiceInput[]; label: string }[] = [];
-  for (let i = 0; i < services.length; i += batchSize) {
+  for (let i = 0; i < services.length; i += resolvedBatchSize) {
     batches.push({
-      batch: services.slice(i, i + batchSize),
-      label: `batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(services.length / batchSize)}`,
+      batch: services.slice(i, i + resolvedBatchSize),
+      label: `batch ${Math.floor(i / resolvedBatchSize) + 1}/${Math.ceil(services.length / resolvedBatchSize)}`,
     });
   }
 
   const results: NormalizedServiceData[] = [];
   let completedServices = 0;
 
-  for (let i = 0; i < batches.length; i += CONCURRENCY) {
-    const chunk = batches.slice(i, i + CONCURRENCY);
+  for (let i = 0; i < batches.length; i += concurrency) {
+    const chunk = batches.slice(i, i + concurrency);
     const chunkResults = await Promise.all(
-      chunk.map((b) => processSingleBatch(model, b.batch, b.label))
+      chunk.map((b) => processSingleBatch(model, b.batch, b.label, effectiveTimeoutMs))
     );
 
     let hadTimeout = false;
@@ -138,7 +148,7 @@ export async function normalizeServices(
     completedServices += chunk.reduce((sum, b) => sum + b.batch.length, 0);
     onProgress?.(completedServices, services.length);
 
-    if (i + CONCURRENCY < batches.length) {
+    if (i + concurrency < batches.length) {
       if (hadTimeout) {
         onLog?.(`Batch timeout — รอ ${COOLDOWN_AFTER_TIMEOUT_MS / 1000}s แล้วทำต่อ...`);
         await new Promise((r) => setTimeout(r, COOLDOWN_AFTER_TIMEOUT_MS));

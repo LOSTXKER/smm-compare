@@ -5,6 +5,7 @@ import { normalizeServices } from "./gemini-normalizer";
 import { matchAndGroupServices } from "./service-matcher";
 import { recordPriceChanges } from "./price-history";
 import { checkProviderHealth } from "./health-monitor";
+import { getConfigInt } from "./config";
 
 export interface SyncResult {
   providerId: string;
@@ -132,7 +133,7 @@ export async function syncProviderWithProgress(
   const { recorded } = await recordPriceChanges(priceUpdates);
 
   let normalizedCount = 0;
-  const MAX_AI_ROUNDS = 5;
+  const MAX_AI_ROUNDS = await getConfigInt("ai_max_rounds", 5);
 
   for (let round = 1; round <= MAX_AI_ROUNDS; round++) {
     const unnormalized = await prisma.rawService.findMany({
