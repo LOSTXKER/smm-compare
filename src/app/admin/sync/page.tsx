@@ -34,10 +34,54 @@ interface LogEntry {
   type: "info" | "success" | "progress" | "error";
 }
 
+function processSSE(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  handlers: {
+    onStep: (event: { provider: string; step: string; detail: string }) => void;
+    onProgress: (event: { provider: string; current: number; total: number; step: string }) => void;
+    onProviderDone: (result: SyncResult) => void;
+    onMatching: (detail: string) => void;
+    onDone: (matchResult: MatchResult) => void;
+    onError: (message: string) => void;
+  }
+) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  async function read(): Promise<void> {
+    const { done, value } = await reader.read();
+    if (done) return;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const dataLine = line.trim();
+      if (!dataLine.startsWith("data: ")) continue;
+      try {
+        const event = JSON.parse(dataLine.slice(6));
+        switch (event.type) {
+          case "step": handlers.onStep(event); break;
+          case "progress": handlers.onProgress(event); break;
+          case "provider_done": handlers.onProviderDone(event.result); break;
+          case "matching": handlers.onMatching(event.detail); break;
+          case "done": handlers.onDone(event.matchResult); break;
+          case "error": handlers.onError(event.message); break;
+        }
+      } catch { /* skip */ }
+    }
+
+    return read();
+  }
+
+  return read();
+}
+
 export default function SyncPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [syncing, setSyncing] = useState(false);
-  const [currentStep, setCurrentStep] = useState("");
+  const [currentProvider, setCurrentProvider] = useState("");
   const [currentDetail, setCurrentDetail] = useState("");
   const [progressCurrent, setProgressCurrent] = useState(0);
   const [progressTotal, setProgressTotal] = useState(0);
@@ -52,7 +96,7 @@ export default function SyncPage() {
   const addLog = useCallback((message: string, type: LogEntry["type"] = "info") => {
     const id = ++logIdRef.current;
     const time = new Date().toLocaleTimeString("th-TH");
-    setLogs((prev) => [...prev.slice(-100), { id, time, message, type }]);
+    setLogs((prev) => [...prev.slice(-200), { id, time, message, type }]);
   }, []);
 
   useEffect(() => {
@@ -70,6 +114,66 @@ export default function SyncPage() {
     fetchProviders();
   }, [fetchProviders]);
 
+  const syncSingleProvider = async (provider: Provider): Promise<SyncResult | null> => {
+    setCurrentProvider(provider.name);
+    setProgressCurrent(0);
+    setProgressTotal(0);
+    setProgressStep("");
+
+    let finalResult: SyncResult | null = null;
+
+    try {
+      const res = await fetch("/api/sync/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id }),
+      });
+
+      if (!res.body) {
+        addLog(`${provider.name}: ไม่สามารถเชื่อมต่อ stream ได้`, "error");
+        return null;
+      }
+
+      await processSSE(res.body.getReader(), {
+        onStep: (event) => {
+          setCurrentDetail(event.detail);
+          if (event.step !== "start") addLog(event.detail);
+        },
+        onProgress: (event) => {
+          setProgressCurrent(event.current);
+          setProgressTotal(event.total);
+          setProgressStep(event.step);
+          if (event.step === "upsert") {
+            setCurrentDetail(`${event.provider}: บันทึกบริการ ${event.current}/${event.total}`);
+          } else if (event.step === "ai") {
+            setCurrentDetail(`${event.provider}: AI วิเคราะห์ ${event.current}/${event.total}`);
+          }
+        },
+        onProviderDone: (result) => {
+          finalResult = result;
+          setResults((prev) => [...prev, result]);
+          if (result.error) {
+            addLog(`✗ ${result.providerName}: ${result.error}`, "error");
+          } else {
+            addLog(
+              `✓ ${result.providerName}: สำเร็จ (${result.servicesFound} บริการ, ${result.priceChanges} ราคาเปลี่ยน, ${result.normalized} วิเคราะห์ใหม่)`,
+              "success"
+            );
+          }
+          setProgressCurrent(0);
+          setProgressTotal(0);
+        },
+        onMatching: () => {},
+        onDone: () => {},
+        onError: (msg) => addLog(msg, "error"),
+      });
+    } catch (err) {
+      addLog(`${provider.name}: ${err instanceof Error ? err.message : "เกิดข้อผิดพลาด"}`, "error");
+    }
+
+    return finalResult;
+  };
+
   const handleSyncAll = async () => {
     setSyncing(true);
     setResults([]);
@@ -80,102 +184,32 @@ export default function SyncPage() {
     setProgressTotal(0);
     logIdRef.current = 0;
 
-    addLog(`เริ่มซิงค์ ${providers.length} เว็บ`, "info");
+    addLog(`เริ่มซิงค์ ${providers.length} เว็บ (ทีละเว็บ)`, "info");
+
+    for (let i = 0; i < providers.length; i++) {
+      const provider = providers[i];
+      setProviderIndex(i + 1);
+      addLog(`(${i + 1}/${providers.length}) เริ่มซิงค์ ${provider.name}`, "info");
+
+      await syncSingleProvider(provider);
+    }
+
+    addLog("จับคู่บริการข้ามเว็บ...", "info");
+    setCurrentProvider("จับคู่บริการ");
+    setCurrentDetail("กำลังจับคู่...");
 
     try {
-      const res = await fetch("/api/sync/stream", { method: "POST" });
-
-      if (!res.body) {
-        addLog("ไม่สามารถเชื่อมต่อ stream ได้", "error");
-        setSyncing(false);
-        return;
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          const dataLine = line.trim();
-          if (!dataLine.startsWith("data: ")) continue;
-          const json = dataLine.slice(6);
-
-          try {
-            const event = JSON.parse(json);
-
-            switch (event.type) {
-              case "step":
-                setCurrentStep(event.provider || "");
-                setCurrentDetail(event.detail);
-                if (event.step === "start_provider") {
-                  const match = event.detail.match(/\((\d+)\//);
-                  if (match) setProviderIndex(parseInt(match[1]));
-                }
-                addLog(event.detail, "info");
-                break;
-
-              case "progress":
-                setProgressCurrent(event.current);
-                setProgressTotal(event.total);
-                setProgressStep(event.step);
-                if (event.step === "upsert") {
-                  setCurrentDetail(`${event.provider}: บันทึกบริการ ${event.current}/${event.total}`);
-                } else if (event.step === "ai") {
-                  setCurrentDetail(`${event.provider}: AI วิเคราะห์ batch ${event.current}/${event.total}`);
-                }
-                break;
-
-              case "provider_done":
-                setResults((prev) => [...prev, event.result]);
-                if (event.result.error) {
-                  addLog(`${event.result.providerName}: ผิดพลาด - ${event.result.error}`, "error");
-                } else {
-                  addLog(
-                    `${event.result.providerName}: สำเร็จ (${event.result.servicesFound} บริการ, ${event.result.priceChanges} ราคาเปลี่ยน, ${event.result.normalized} วิเคราะห์ใหม่)`,
-                    "success"
-                  );
-                }
-                setProgressCurrent(0);
-                setProgressTotal(0);
-                break;
-
-              case "matching":
-                setCurrentStep("matching");
-                setCurrentDetail(event.detail);
-                addLog(event.detail, "info");
-                break;
-
-              case "done":
-                setMatchResult(event.matchResult);
-                addLog(
-                  `เสร็จสิ้น! จับคู่ ${event.matchResult.matched} บริการ, สร้างกลุ่มใหม่ ${event.matchResult.newGroups} กลุ่ม`,
-                  "success"
-                );
-                break;
-
-              case "error":
-                addLog(event.message, "error");
-                break;
-            }
-          } catch {
-            // skip malformed JSON
-          }
-        }
-      }
-    } catch (err) {
-      addLog(`เกิดข้อผิดพลาด: ${err instanceof Error ? err.message : "Unknown"}`, "error");
+      const matchRes = await fetch("/api/match", { method: "POST" });
+      const matchData = await matchRes.json();
+      const mr = { matched: matchData.matched || 0, newGroups: matchData.newGroups || 0 };
+      setMatchResult(mr);
+      addLog(`เสร็จสิ้น! จับคู่ ${mr.matched} บริการ, สร้างกลุ่มใหม่ ${mr.newGroups} กลุ่ม`, "success");
+    } catch {
+      addLog("จับคู่บริการล้มเหลว", "error");
     }
 
     setSyncing(false);
-    setCurrentStep("");
+    setCurrentProvider("");
     setCurrentDetail("");
     toast.success("ซิงค์เสร็จสิ้น!");
   };
@@ -203,19 +237,18 @@ export default function SyncPage() {
 
   return (
     <div className="space-y-6">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h1 className="text-2xl font-bold">ซิงค์ข้อมูล</h1>
-            <p className="text-muted-foreground">
-              ดึงข้อมูลบริการและราคาล่าสุดจากทุกผู้ให้บริการ
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">ซิงค์ข้อมูล</h1>
+          <p className="text-muted-foreground">
+            ดึงข้อมูลบริการและราคาล่าสุดจากทุกผู้ให้บริการ
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
           <Button
             variant="outline"
             onClick={handleRenormalize}
             disabled={syncing}
-            title="รีเซ็ตข้อมูล AI และวิเคราะห์ใหม่ทั้งหมด (ใช้เมื่อ AI prompt เปลี่ยน)"
           >
             วิเคราะห์ใหม่ทั้งหมด
           </Button>
@@ -226,187 +259,164 @@ export default function SyncPage() {
           >
             {syncing ? "กำลังซิงค์..." : `ซิงค์ทั้งหมด (${providers.length} เว็บ)`}
           </Button>
-          </div>
         </div>
+      </div>
 
-        {syncing && (
-          <Card>
-            <CardContent className="p-6 space-y-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">{currentStep || "กำลังเตรียมข้อมูล..."}</span>
-                <span className="text-muted-foreground">
-                  {providerIndex}/{providers.length} เว็บ
-                </span>
+      {syncing && (
+        <Card>
+          <CardContent className="p-6 space-y-4">
+            <div className="flex items-center justify-between text-sm">
+              <span className="font-medium">{currentProvider || "กำลังเตรียมข้อมูล..."}</span>
+              <span className="text-muted-foreground">
+                {providerIndex}/{providers.length} เว็บ
+              </span>
+            </div>
+
+            <div className="space-y-1">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span>ภาพรวม</span>
+                <span>{overallProgress}%</span>
               </div>
+              <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full bg-primary transition-all duration-300"
+                  style={{ width: `${overallProgress}%` }}
+                />
+              </div>
+            </div>
 
+            {progressTotal > 0 && (
               <div className="space-y-1">
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>ภาพรวม</span>
-                  <span>{overallProgress}%</span>
+                  <span>
+                    {progressStep === "upsert"
+                      ? `บันทึกบริการ ${progressCurrent}/${progressTotal}`
+                      : progressStep === "ai"
+                        ? `AI วิเคราะห์ ${progressCurrent}/${progressTotal}`
+                        : progressStep === "ai_save"
+                          ? `บันทึกผลวิเคราะห์ ${progressCurrent}/${progressTotal}`
+                          : `${progressCurrent}/${progressTotal}`}
+                  </span>
+                  <span>{subProgressPercent}%</span>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
                   <div
-                    className="h-full rounded-full bg-primary transition-all duration-300"
-                    style={{ width: `${overallProgress}%` }}
+                    className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                    style={{ width: `${subProgressPercent}%` }}
                   />
                 </div>
               </div>
-
-              {progressTotal > 0 && (
-                <div className="space-y-1">
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>
-                      {progressStep === "upsert"
-                        ? `บันทึกบริการ ${progressCurrent}/${progressTotal}`
-                        : progressStep === "ai"
-                          ? `AI วิเคราะห์ ${progressCurrent}/${progressTotal}`
-                          : progressStep === "ai_save"
-                            ? `บันทึกผลวิเคราะห์ ${progressCurrent}/${progressTotal}`
-                            : `${progressCurrent}/${progressTotal}`}
-                    </span>
-                    <span>{subProgressPercent}%</span>
-                  </div>
-                  <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-                    <div
-                      className="h-full rounded-full bg-blue-500 transition-all duration-300"
-                      style={{ width: `${subProgressPercent}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <p className="text-center text-xs text-muted-foreground">
-                {currentDetail}
-              </p>
-            </CardContent>
-          </Card>
-        )}
-
-        {(syncing || logs.length > 0) && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">บันทึกการทำงาน</CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              <div className="max-h-60 overflow-y-auto rounded-b-lg bg-zinc-950 px-4 py-3 font-mono text-xs">
-                {logs.map((log) => (
-                  <div key={log.id} className="flex gap-2 py-0.5">
-                    <span className="shrink-0 text-zinc-500">{log.time}</span>
-                    <span
-                      className={
-                        log.type === "error"
-                          ? "text-red-400"
-                          : log.type === "success"
-                            ? "text-green-400"
-                            : log.type === "progress"
-                              ? "text-blue-400"
-                              : "text-zinc-300"
-                      }
-                    >
-                      {log.type === "error" ? "✗ " : log.type === "success" ? "✓ " : ""}
-                      {log.message}
-                    </span>
-                  </div>
-                ))}
-                <div ref={logEndRef} />
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-        {results.length > 0 && !syncing && (
-          <div className="space-y-4">
-            {matchResult && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>ผลการจับคู่</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="flex gap-6">
-                    <div>
-                      <span className="text-2xl font-bold">
-                        {matchResult.matched}
-                      </span>
-                      <p className="text-sm text-muted-foreground">
-                        บริการที่จับคู่ได้
-                      </p>
-                    </div>
-                    <div>
-                      <span className="text-2xl font-bold">
-                        {matchResult.newGroups}
-                      </span>
-                      <p className="text-sm text-muted-foreground">
-                        กลุ่มใหม่ที่สร้าง
-                      </p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
             )}
 
-            {results.map((result, idx) => (
-              <Card key={`${result.providerId}-${idx}`}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base">
-                      {result.providerName}
-                    </CardTitle>
-                    <Badge
-                      variant={result.error ? "destructive" : "outline"}
-                      className={
-                        result.error
-                          ? undefined
-                          : "border-green-500 text-green-500"
-                      }
-                    >
-                      {result.error ? "ผิดพลาด" : "สำเร็จ"}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  {result.error ? (
-                    <p className="text-sm text-red-500">{result.error}</p>
-                  ) : (
-                    <div className="grid grid-cols-4 gap-4 text-sm">
-                      <div>
-                        <span className="font-semibold">
-                          {result.servicesFound}
-                        </span>
-                        <p className="text-muted-foreground">พบบริการ</p>
-                      </div>
-                      <div>
-                        <span className="font-semibold">
-                          {result.servicesUpserted}
-                        </span>
-                        <p className="text-muted-foreground">บันทึกแล้ว</p>
-                      </div>
-                      <div>
-                        <span className="font-semibold">
-                          {result.priceChanges}
-                        </span>
-                        <p className="text-muted-foreground">ราคาเปลี่ยน</p>
-                      </div>
-                      <div>
-                        <span className="font-semibold">
-                          {result.normalized}
-                        </span>
-                        <p className="text-muted-foreground">วิเคราะห์ใหม่</p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
+            <p className="text-center text-xs text-muted-foreground">
+              {currentDetail}
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
-        {!syncing && results.length === 0 && logs.length === 0 && (
-          <Card>
-            <CardContent className="flex h-40 items-center justify-center text-muted-foreground">
-              กดปุ่ม &quot;ซิงค์ทั้งหมด&quot; เพื่อดึงข้อมูลล่าสุดจากทุกผู้ให้บริการ
-            </CardContent>
-          </Card>
-        )}
+      {(syncing || logs.length > 0) && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">บันทึกการทำงาน</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="max-h-60 overflow-y-auto rounded-b-lg bg-zinc-950 px-4 py-3 font-mono text-xs">
+              {logs.map((log) => (
+                <div key={log.id} className="flex gap-2 py-0.5">
+                  <span className="shrink-0 text-zinc-500">{log.time}</span>
+                  <span
+                    className={
+                      log.type === "error"
+                        ? "text-red-400"
+                        : log.type === "success"
+                          ? "text-green-400"
+                          : log.type === "progress"
+                            ? "text-blue-400"
+                            : "text-zinc-300"
+                    }
+                  >
+                    {log.message}
+                  </span>
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {results.length > 0 && !syncing && (
+        <div className="space-y-4">
+          {matchResult && (
+            <Card>
+              <CardHeader>
+                <CardTitle>ผลการจับคู่</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex gap-6">
+                  <div>
+                    <span className="text-2xl font-bold">{matchResult.matched}</span>
+                    <p className="text-sm text-muted-foreground">บริการที่จับคู่ได้</p>
+                  </div>
+                  <div>
+                    <span className="text-2xl font-bold">{matchResult.newGroups}</span>
+                    <p className="text-sm text-muted-foreground">กลุ่มใหม่ที่สร้าง</p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {results.map((result, idx) => (
+            <Card key={`${result.providerId}-${idx}`}>
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-base">{result.providerName}</CardTitle>
+                  <Badge
+                    variant={result.error ? "destructive" : "outline"}
+                    className={result.error ? undefined : "border-green-500 text-green-500"}
+                  >
+                    {result.error ? "ผิดพลาด" : "สำเร็จ"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {result.error ? (
+                  <p className="text-sm text-red-500">{result.error}</p>
+                ) : (
+                  <div className="grid grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <span className="font-semibold">{result.servicesFound}</span>
+                      <p className="text-muted-foreground">พบบริการ</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold">{result.servicesUpserted}</span>
+                      <p className="text-muted-foreground">บันทึกแล้ว</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold">{result.priceChanges}</span>
+                      <p className="text-muted-foreground">ราคาเปลี่ยน</p>
+                    </div>
+                    <div>
+                      <span className="font-semibold">{result.normalized}</span>
+                      <p className="text-muted-foreground">วิเคราะห์ใหม่</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {!syncing && results.length === 0 && logs.length === 0 && (
+        <Card>
+          <CardContent className="flex h-40 items-center justify-center text-muted-foreground">
+            กดปุ่ม &quot;ซิงค์ทั้งหมด&quot; เพื่อดึงข้อมูลล่าสุดจากทุกผู้ให้บริการ
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
