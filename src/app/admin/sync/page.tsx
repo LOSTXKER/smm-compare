@@ -12,6 +12,20 @@ interface Provider {
   _count: { services: number };
 }
 
+interface SyncLogEntry {
+  id: string;
+  providerName: string;
+  trigger: string;
+  servicesFound: number;
+  priceChanges: number;
+  normalized: number;
+  matched: number;
+  newGroups: number;
+  durationMs: number;
+  error: string | null;
+  createdAt: string;
+}
+
 interface SyncResult {
   providerId: string;
   providerName: string;
@@ -90,6 +104,7 @@ export default function SyncPage() {
   const [results, setResults] = useState<SyncResult[]>([]);
   const [matchResult, setMatchResult] = useState<MatchResult | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [syncHistory, setSyncHistory] = useState<SyncLogEntry[]>([]);
   const logIdRef = useRef(0);
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -110,9 +125,17 @@ export default function SyncPage() {
       .catch(console.error);
   }, []);
 
+  const fetchSyncHistory = useCallback(() => {
+    fetch("/api/sync/logs")
+      .then((r) => r.json())
+      .then(setSyncHistory)
+      .catch(console.error);
+  }, []);
+
   useEffect(() => {
     fetchProviders();
-  }, [fetchProviders]);
+    fetchSyncHistory();
+  }, [fetchProviders, fetchSyncHistory]);
 
   const syncSingleProvider = async (provider: Provider): Promise<SyncResult | null> => {
     setCurrentProvider(provider.name);
@@ -219,6 +242,7 @@ export default function SyncPage() {
     setSyncing(false);
     setCurrentProvider("");
     setCurrentDetail("");
+    fetchSyncHistory();
     toast.success("ซิงค์เสร็จสิ้น!");
   };
 
@@ -422,6 +446,70 @@ export default function SyncPage() {
         <Card>
           <CardContent className="flex h-40 items-center justify-center text-muted-foreground">
             กดปุ่ม &quot;ซิงค์ทั้งหมด&quot; เพื่อดึงข้อมูลล่าสุดจากทุกผู้ให้บริการ
+          </CardContent>
+        </Card>
+      )}
+
+      {syncHistory.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">ประวัติซิงค์อัตโนมัติ</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-muted-foreground">
+                    <th className="px-4 py-2 font-medium">เวลา</th>
+                    <th className="px-4 py-2 font-medium">เว็บ</th>
+                    <th className="px-4 py-2 font-medium">ประเภท</th>
+                    <th className="px-4 py-2 font-medium text-right">บริการ</th>
+                    <th className="px-4 py-2 font-medium text-right">ราคาเปลี่ยน</th>
+                    <th className="px-4 py-2 font-medium text-right">AI ใหม่</th>
+                    <th className="px-4 py-2 font-medium text-right">จับคู่</th>
+                    <th className="px-4 py-2 font-medium text-right">ใช้เวลา</th>
+                    <th className="px-4 py-2 font-medium text-center">สถานะ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {syncHistory.map((log) => (
+                    <tr key={log.id} className="border-b last:border-0 hover:bg-muted/50">
+                      <td className="px-4 py-2 text-muted-foreground whitespace-nowrap">
+                        {new Date(log.createdAt).toLocaleString("th-TH", { dateStyle: "short", timeStyle: "short" })}
+                      </td>
+                      <td className="px-4 py-2 font-medium">{log.providerName}</td>
+                      <td className="px-4 py-2">
+                        <Badge variant="outline" className="text-xs">
+                          {log.trigger === "cron" ? "อัตโนมัติ" : "มือ"}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2 text-right">{log.servicesFound}</td>
+                      <td className="px-4 py-2 text-right">
+                        {log.priceChanges > 0 ? (
+                          <span className="text-amber-500">{log.priceChanges}</span>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2 text-right">{log.normalized}</td>
+                      <td className="px-4 py-2 text-right">{log.matched}</td>
+                      <td className="px-4 py-2 text-right text-muted-foreground">
+                        {log.durationMs >= 60_000
+                          ? `${Math.floor(log.durationMs / 60_000)}m ${Math.round((log.durationMs % 60_000) / 1000)}s`
+                          : `${Math.round(log.durationMs / 1000)}s`}
+                      </td>
+                      <td className="px-4 py-2 text-center">
+                        {log.error ? (
+                          <Badge variant="destructive" className="text-xs">{log.error.slice(0, 30)}</Badge>
+                        ) : (
+                          <Badge variant="outline" className="border-green-500 text-green-500 text-xs">สำเร็จ</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </CardContent>
         </Card>
       )}

@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
-  const [totalProviders, totalServices, totalGroups, oldestSyncProvider] = await Promise.all([
+  const [totalProviders, totalServices, totalGroups, oldestSyncProvider, latestSyncLog] = await Promise.all([
     prisma.provider.count({ where: { active: true } }),
     prisma.rawService.count(),
     prisma.serviceGroup.count(),
@@ -10,6 +10,17 @@ export async function GET() {
       where: { active: true },
       orderBy: { lastSyncedAt: { sort: "asc", nulls: "first" } },
       select: { name: true, lastSyncedAt: true },
+    }),
+    prisma.syncLog.findFirst({
+      orderBy: { createdAt: "desc" },
+      select: {
+        providerName: true,
+        servicesFound: true,
+        priceChanges: true,
+        normalized: true,
+        error: true,
+        createdAt: true,
+      },
     }),
   ]);
 
@@ -102,6 +113,16 @@ export async function GET() {
       ? {
           providerName: oldestSyncProvider.name,
           lastSyncedAt: oldestSyncProvider.lastSyncedAt?.toISOString() ?? null,
+        }
+      : null,
+    latestSync: latestSyncLog
+      ? {
+          providerName: latestSyncLog.providerName,
+          servicesFound: latestSyncLog.servicesFound,
+          priceChanges: latestSyncLog.priceChanges,
+          normalized: latestSyncLog.normalized,
+          error: latestSyncLog.error,
+          createdAt: latestSyncLog.createdAt.toISOString(),
         }
       : null,
   });

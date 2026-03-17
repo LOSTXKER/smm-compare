@@ -20,6 +20,8 @@ export async function POST(req: NextRequest) {
 
   try {
     if (isCron && !providerId) {
+      const startTime = Date.now();
+
       const provider = await prisma.provider.findFirst({
         where: { active: true },
         orderBy: [
@@ -33,8 +35,31 @@ export async function POST(req: NextRequest) {
 
       console.log(`[CRON] Auto-syncing provider: ${provider.name} (last synced: ${provider.lastSyncedAt?.toISOString() ?? "never"})`);
 
-      const result = await syncProvider(provider.id);
-      const matchResult = await matchAndGroupServices();
+      let syncError: string | undefined;
+      let result;
+      let matchResult = { matched: 0, newGroups: 0 };
+
+      try {
+        result = await syncProvider(provider.id);
+        matchResult = await matchAndGroupServices();
+      } catch (err) {
+        syncError = err instanceof Error ? err.message : "Unknown error";
+      }
+
+      await prisma.syncLog.create({
+        data: {
+          providerId: provider.id,
+          providerName: provider.name,
+          trigger: "cron",
+          servicesFound: result?.servicesFound ?? 0,
+          priceChanges: result?.priceChanges ?? 0,
+          normalized: result?.normalized ?? 0,
+          matched: matchResult.matched,
+          newGroups: matchResult.newGroups,
+          durationMs: Date.now() - startTime,
+          error: syncError ?? result?.error ?? null,
+        },
+      });
 
       return NextResponse.json({
         cron: true,

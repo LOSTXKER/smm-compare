@@ -23,6 +23,14 @@ interface Stats {
     providerName: string;
     lastSyncedAt: string | null;
   } | null;
+  latestSync: {
+    providerName: string;
+    servicesFound: number;
+    priceChanges: number;
+    normalized: number;
+    error: string | null;
+    createdAt: string;
+  } | null;
 }
 
 export function SummaryStats() {
@@ -109,18 +117,45 @@ export function SummaryStats() {
         ))}
       </div>
       {syncInfo && (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-4 py-2 text-sm text-muted-foreground">
-          <span className="relative flex h-2 w-2">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
-          </span>
-          <span>
-            ซิงค์อัตโนมัติทุก 1 ชั่วโมง
-            {" \u00b7 "}
-            ถัดไป: <strong>{syncInfo.providerName}</strong>
-            {" \u00b7 "}
-            ซิงค์ล่าสุด: {lastSyncText}
-          </span>
+        <div className="rounded-lg border border-border bg-card px-4 py-3 text-sm">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-green-500" />
+            </span>
+            <span>
+              ซิงค์อัตโนมัติทุก 1 ชั่วโมง
+              {" \u00b7 "}
+              ถัดไป: <strong className="text-foreground">{syncInfo.providerName}</strong>
+              {" \u00b7 "}
+              ซิงค์ล่าสุด: {lastSyncText}
+            </span>
+          </div>
+          {stats.latestSync && (
+            <div className="mt-2 flex items-center gap-3 border-t border-border pt-2 text-xs text-muted-foreground">
+              <span>
+                ล่าสุด: <strong className="text-foreground">{stats.latestSync.providerName}</strong>
+                {" "}
+                ({formatRelativeTime(stats.latestSync.createdAt)})
+              </span>
+              {stats.latestSync.error ? (
+                <span className="text-red-500">ผิดพลาด: {stats.latestSync.error.slice(0, 50)}</span>
+              ) : (
+                <>
+                  <span>{stats.latestSync.servicesFound} บริการ</span>
+                  {stats.latestSync.priceChanges > 0 && (
+                    <span className="text-amber-500">{stats.latestSync.priceChanges} ราคาเปลี่ยน</span>
+                  )}
+                  {stats.latestSync.normalized > 0 && (
+                    <span className="text-blue-500">{stats.latestSync.normalized} AI ใหม่</span>
+                  )}
+                  {stats.latestSync.priceChanges === 0 && stats.latestSync.normalized === 0 && (
+                    <span className="text-green-500">ไม่มีการเปลี่ยนแปลง</span>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -115,6 +115,23 @@ model User {
   updatedAt DateTime @updatedAt
 }
 
+model SyncLog {
+  id             String   @id @default(cuid())
+  providerId     String
+  providerName   String
+  trigger        String   @default("cron")
+  servicesFound  Int      @default(0)
+  priceChanges   Int      @default(0)
+  normalized     Int      @default(0)
+  matched        Int      @default(0)
+  newGroups      Int      @default(0)
+  durationMs     Int      @default(0)
+  error          String?
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+}
+
 model ExchangeRate {
   id           String   @id @default(cuid())
   baseCurrency String
