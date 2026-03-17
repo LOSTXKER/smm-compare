@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { syncProviderWithProgress, type ProgressEvent, type SyncResult } from "@/lib/sync";
 import { matchAndGroupServices } from "@/lib/service-matcher";
+import { requireAdmin } from "@/lib/api-auth";
 
 export const maxDuration = 300;
 
 export async function POST() {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+
   const providers = await prisma.provider.findMany({
     where: { active: true },
     orderBy: { createdAt: "asc" },

@@ -5,6 +5,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { AppLayout } from "@/components/sidebar";
 import { GlobalSearch } from "@/components/global-search";
 import { CurrencyProvider } from "@/components/currency-provider";
+import { AuthSessionProvider } from "@/components/session-provider";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -21,10 +22,12 @@ export default function RootLayout({
   return (
     <html lang="th" className="dark">
       <body className={inter.className}>
-        <CurrencyProvider>
-          <AppLayout>{children}</AppLayout>
-          <GlobalSearch />
-        </CurrencyProvider>
+        <AuthSessionProvider>
+          <CurrencyProvider>
+            <AppLayout>{children}</AppLayout>
+            <GlobalSearch />
+          </CurrencyProvider>
+        </AuthSessionProvider>
         <Toaster />
       </body>
     </html>

@@ -19,31 +19,34 @@ import {
   LogOut,
 } from "lucide-react";
 import { useCurrency } from "./currency-provider";
-import { signOut } from "next-auth/react";
+import { signOut, useSession } from "next-auth/react";
 
-const navSections = [
-  {
-    label: "หลัก",
-    items: [
-      { href: "/", label: "ภาพรวม", icon: BarChart3 },
-      { href: "/competitors", label: "จัดอันดับคู่แข่ง", icon: Trophy },
-    ],
-  },
-  {
-    label: "จัดการ",
-    items: [
-      { href: "/admin/providers", label: "ผู้ให้บริการ", icon: Users },
-      { href: "/admin/matching", label: "จับคู่บริการ", icon: GitCompare },
-      { href: "/admin/sync", label: "ซิงค์ข้อมูล", icon: RefreshCw },
-      { href: "/admin/pricing", label: "แนะนำราคา", icon: DollarSign },
-      { href: "/admin/users", label: "จัดการผู้ใช้", icon: UserCog },
-    ],
-  },
-];
+const mainSection = {
+  label: "หลัก",
+  items: [
+    { href: "/", label: "ภาพรวม", icon: BarChart3 },
+    { href: "/competitors", label: "จัดอันดับคู่แข่ง", icon: Trophy },
+  ],
+};
+
+const adminSection = {
+  label: "จัดการ",
+  adminOnly: true,
+  items: [
+    { href: "/admin/providers", label: "ผู้ให้บริการ", icon: Users },
+    { href: "/admin/matching", label: "จับคู่บริการ", icon: GitCompare },
+    { href: "/admin/sync", label: "ซิงค์ข้อมูล", icon: RefreshCw },
+    { href: "/admin/pricing", label: "แนะนำราคา", icon: DollarSign },
+    { href: "/admin/users", label: "จัดการผู้ใช้", icon: UserCog },
+  ],
+};
 
 export function Sidebar() {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const { data: session } = useSession();
+  const role = session?.user?.role;
+  const navSections = role === "admin" ? [mainSection, adminSection] : [mainSection];
 
   return (
     <>

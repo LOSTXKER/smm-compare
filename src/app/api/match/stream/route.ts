@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/api-auth";
 
 export const maxDuration = 300;
 
 export async function POST() {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({

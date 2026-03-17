@@ -29,6 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { toast } from "sonner";
+import { Pencil } from "lucide-react";
 
 interface Provider {
   id: string;
@@ -46,7 +47,8 @@ interface Provider {
 export default function ProvidersPage() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Provider | null>(null);
 
   const fetchProviders = () => {
     fetch("/api/providers")
@@ -62,74 +64,97 @@ export default function ProvidersPage() {
 
   return (
     <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">ผู้ให้บริการ</h1>
-            <p className="text-muted-foreground">
-              จัดการการเชื่อมต่อ API ของแต่ละ SMM Panel
-            </p>
-          </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger render={<Button />}>
-              + เพิ่มผู้ให้บริการ
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-lg">
-              <DialogHeader>
-                <DialogTitle>เพิ่มผู้ให้บริการใหม่</DialogTitle>
-              </DialogHeader>
-              <AddProviderForm
-                onSuccess={() => {
-                  setDialogOpen(false);
-                  fetchProviders();
-                }}
-              />
-            </DialogContent>
-          </Dialog>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold">ผู้ให้บริการ</h1>
+          <p className="text-muted-foreground">
+            จัดการการเชื่อมต่อ API ของแต่ละ SMM Panel
+          </p>
         </div>
+        <Dialog open={addOpen} onOpenChange={setAddOpen}>
+          <DialogTrigger render={<Button />}>
+            + เพิ่มผู้ให้บริการ
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>เพิ่มผู้ให้บริการใหม่</DialogTitle>
+            </DialogHeader>
+            <ProviderForm
+              onSuccess={() => {
+                setAddOpen(false);
+                fetchProviders();
+              }}
+            />
+          </DialogContent>
+        </Dialog>
+      </div>
 
-        <Card>
-          <CardHeader>
-              <CardTitle>ผู้ให้บริการทั้งหมด</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {loading ? (
-              <div className="space-y-3">
-                {Array.from({ length: 3 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className="h-12 animate-pulse rounded bg-muted"
+      {/* Edit dialog */}
+      <Dialog
+        open={!!editTarget}
+        onOpenChange={(open) => !open && setEditTarget(null)}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>แก้ไข {editTarget?.name}</DialogTitle>
+          </DialogHeader>
+          {editTarget && (
+            <ProviderForm
+              provider={editTarget}
+              onSuccess={() => {
+                setEditTarget(null);
+                fetchProviders();
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>ผู้ให้บริการทั้งหมด</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="h-12 animate-pulse rounded bg-muted"
+                />
+              ))}
+            </div>
+          ) : providers.length === 0 ? (
+            <p className="py-8 text-center text-muted-foreground">
+              ยังไม่มีผู้ให้บริการ กดปุ่ม &quot;+ เพิ่มผู้ให้บริการ&quot;
+              เพื่อเริ่มต้น
+            </p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>ชื่อ</TableHead>
+                  <TableHead>API URL</TableHead>
+                  <TableHead>สกุลเงิน</TableHead>
+                  <TableHead className="text-center">บริการ</TableHead>
+                  <TableHead className="text-center">สถานะ</TableHead>
+                  <TableHead className="text-right">จัดการ</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {providers.map((provider) => (
+                  <ProviderRow
+                    key={provider.id}
+                    provider={provider}
+                    onUpdate={fetchProviders}
+                    onEdit={() => setEditTarget(provider)}
                   />
                 ))}
-              </div>
-            ) : providers.length === 0 ? (
-              <p className="py-8 text-center text-muted-foreground">
-                ยังไม่มีผู้ให้บริการ กดปุ่ม &quot;+ เพิ่มผู้ให้บริการ&quot; เพื่อเริ่มต้น
-              </p>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>ชื่อ</TableHead>
-                    <TableHead>API URL</TableHead>
-                    <TableHead>สกุลเงิน</TableHead>
-                    <TableHead className="text-center">บริการ</TableHead>
-                    <TableHead className="text-center">สถานะ</TableHead>
-                    <TableHead className="text-right">จัดการ</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {providers.map((provider) => (
-                    <ProviderRow
-                      key={provider.id}
-                      provider={provider}
-                      onUpdate={fetchProviders}
-                    />
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -137,9 +162,11 @@ export default function ProvidersPage() {
 function ProviderRow({
   provider,
   onUpdate,
+  onEdit,
 }: {
   provider: Provider;
   onUpdate: () => void;
+  onEdit: () => void;
 }) {
   const [syncing, setSyncing] = useState(false);
   const healthStatus = provider.healthChecks[0]?.status || "unknown";
@@ -154,7 +181,7 @@ function ProviderRow({
         body: JSON.stringify({ providerId: provider.id }),
       });
       const data = await res.json();
-        if (data.error) {
+      if (data.error) {
         toast.error(`ซิงค์ล้มเหลว: ${data.error}`);
       } else {
         toast.success(
@@ -170,7 +197,7 @@ function ProviderRow({
   };
 
   const handleDelete = async () => {
-    if (!confirm(`ลบ ${provider.name}?`)) return;
+    if (!confirm(`ลบ ${provider.name} พร้อมข้อมูลบริการทั้งหมด?`)) return;
     try {
       await fetch(`/api/providers?id=${provider.id}`, { method: "DELETE" });
       toast.success("ลบผู้ให้บริการแล้ว");
@@ -215,6 +242,10 @@ function ProviderRow({
       </TableCell>
       <TableCell className="text-right">
         <div className="flex justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onEdit}>
+            <Pencil className="mr-1 h-3 w-3" />
+            แก้ไข
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -232,12 +263,20 @@ function ProviderRow({
   );
 }
 
-function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
-  const [name, setName] = useState("");
-  const [apiUrl, setApiUrl] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [currency, setCurrency] = useState("USD");
-  const [isOwner, setIsOwner] = useState(false);
+function ProviderForm({
+  provider,
+  onSuccess,
+}: {
+  provider?: Provider;
+  onSuccess: () => void;
+}) {
+  const isEdit = !!provider;
+  const [name, setName] = useState(provider?.name ?? "");
+  const [apiUrl, setApiUrl] = useState(provider?.apiUrl ?? "");
+  const [apiKey, setApiKey] = useState(provider?.apiKey ?? "");
+  const [currency, setCurrency] = useState(provider?.currency ?? "USD");
+  const [isOwner, setIsOwner] = useState(provider?.isOwner ?? false);
+  const [active, setActive] = useState(provider?.active ?? true);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -271,19 +310,23 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
     setSubmitting(true);
     try {
       const res = await fetch("/api/providers", {
-        method: "POST",
+        method: isEdit ? "PUT" : "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, apiUrl, apiKey, currency, isOwner }),
+        body: JSON.stringify(
+          isEdit
+            ? { id: provider.id, name, apiUrl, apiKey, currency, isOwner, active }
+            : { name, apiUrl, apiKey, currency, isOwner }
+        ),
       });
       const data = await res.json();
       if (data.error) {
         toast.error(data.error);
       } else {
-        toast.success(`เพิ่ม ${name} สำเร็จ`);
+        toast.success(isEdit ? `อัพเดท ${name} สำเร็จ` : `เพิ่ม ${name} สำเร็จ`);
         onSuccess();
       }
     } catch {
-      toast.error("เพิ่มผู้ให้บริการล้มเหลว");
+      toast.error(isEdit ? "อัพเดทล้มเหลว" : "เพิ่มผู้ให้บริการล้มเหลว");
     } finally {
       setSubmitting(false);
     }
@@ -292,9 +335,9 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
-        <Label htmlFor="name">ชื่อผู้ให้บริการ</Label>
+        <Label htmlFor="prov-name">ชื่อผู้ให้บริการ</Label>
         <Input
-          id="name"
+          id="prov-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="เช่น SMMDragon"
@@ -302,9 +345,9 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="apiUrl">API URL</Label>
+        <Label htmlFor="prov-url">API URL</Label>
         <Input
-          id="apiUrl"
+          id="prov-url"
           value={apiUrl}
           onChange={(e) => setApiUrl(e.target.value)}
           placeholder="https://example.com/api/v2"
@@ -312,14 +355,14 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor="apiKey">API Key</Label>
+        <Label htmlFor="prov-key">API Key</Label>
         <Input
-          id="apiKey"
+          id="prov-key"
           type="password"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
-          placeholder="API key ของคุณ"
-          required
+          placeholder={isEdit ? "ไม่เปลี่ยนให้ว่างไว้" : "API key ของคุณ"}
+          required={!isEdit}
         />
       </div>
       <div className="flex gap-4">
@@ -337,7 +380,7 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
             </SelectContent>
           </Select>
         </div>
-        <div className="flex items-end">
+        <div className="flex items-end gap-4">
           <label className="flex items-center gap-2 pb-2">
             <input
               type="checkbox"
@@ -345,8 +388,19 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
               onChange={(e) => setIsOwner(e.target.checked)}
               className="rounded"
             />
-            <span className="text-sm">นี่คือเว็บของเรา</span>
+            <span className="text-sm">เว็บของเรา</span>
           </label>
+          {isEdit && (
+            <label className="flex items-center gap-2 pb-2">
+              <input
+                type="checkbox"
+                checked={active}
+                onChange={(e) => setActive(e.target.checked)}
+                className="rounded"
+              />
+              <span className="text-sm">เปิดใช้งาน</span>
+            </label>
+          )}
         </div>
       </div>
 
@@ -367,7 +421,10 @@ function AddProviderForm({ onSuccess }: { onSuccess: () => void }) {
         >
           {testing ? "กำลังทดสอบ..." : "ทดสอบการเชื่อมต่อ"}
         </Button>
-        <Button type="submit" disabled={!name || !apiUrl || !apiKey || submitting}>
+        <Button
+          type="submit"
+          disabled={!name || !apiUrl || (!isEdit && !apiKey) || submitting}
+        >
           {submitting ? "กำลังบันทึก..." : "บันทึก"}
         </Button>
       </div>

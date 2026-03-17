@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { matchAndGroupServices, reassignService, verifyGroup } from "@/lib/service-matcher";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(req: Request) {
+  const denied = await requireAdmin();
+  if (denied) return denied;
+
   const body = await req.json().catch(() => ({}));
   const { action } = body as { action?: string };
 

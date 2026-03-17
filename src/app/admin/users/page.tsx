@@ -21,8 +21,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
-import { UserPlus, KeyRound } from "lucide-react";
+import { UserPlus, KeyRound, Shield, Eye } from "lucide-react";
 
 interface User {
   id: string;
@@ -118,9 +125,41 @@ export default function UsersPage() {
   );
 }
 
+function RoleBadge({ role }: { role: string }) {
+  if (role === "admin") {
+    return (
+      <Badge className="bg-purple-500/15 text-purple-400 border-purple-500/30">
+        <Shield className="mr-1 h-3 w-3" />
+        Admin
+      </Badge>
+    );
+  }
+  return (
+    <Badge className="bg-blue-500/15 text-blue-400 border-blue-500/30">
+      <Eye className="mr-1 h-3 w-3" />
+      Viewer
+    </Badge>
+  );
+}
+
 function UserRow({ user, onUpdate }: { user: User; onUpdate: () => void }) {
   const [changingPw, setChangingPw] = useState(false);
   const [newPassword, setNewPassword] = useState("");
+
+  const handleToggleRole = async () => {
+    const newRole = user.role === "admin" ? "viewer" : "admin";
+    try {
+      await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: user.id, role: newRole }),
+      });
+      toast.success(`เปลี่ยนสิทธิ์เป็น ${newRole} แล้ว`);
+      onUpdate();
+    } catch {
+      toast.error("เปลี่ยนสิทธิ์ล้มเหลว");
+    }
+  };
 
   const handleToggleActive = async () => {
     try {
@@ -177,7 +216,7 @@ function UserRow({ user, onUpdate }: { user: User; onUpdate: () => void }) {
         <TableCell className="font-medium">{user.name}</TableCell>
         <TableCell className="text-sm text-muted-foreground">{user.email}</TableCell>
         <TableCell className="text-center">
-          <Badge variant="secondary">{user.role}</Badge>
+          <RoleBadge role={user.role} />
         </TableCell>
         <TableCell className="text-center">
           <Badge
@@ -196,6 +235,13 @@ function UserRow({ user, onUpdate }: { user: User; onUpdate: () => void }) {
         </TableCell>
         <TableCell className="text-right">
           <div className="flex justify-end gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleToggleRole}
+            >
+              {user.role === "admin" ? "เป็น Viewer" : "เป็น Admin"}
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -253,6 +299,7 @@ function AddUserForm({ onSuccess }: { onSuccess: () => void }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState("viewer");
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -266,7 +313,7 @@ function AddUserForm({ onSuccess }: { onSuccess: () => void }) {
       const res = await fetch("/api/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ name, email, password, role }),
       });
       const data = await res.json();
       if (data.error) {
@@ -315,6 +362,18 @@ function AddUserForm({ onSuccess }: { onSuccess: () => void }) {
           placeholder="อย่างน้อย 6 ตัวอักษร"
           required
         />
+      </div>
+      <div className="space-y-2">
+        <Label>สิทธิ์</Label>
+        <Select value={role} onValueChange={(v) => v && setRole(v)}>
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="admin">Admin (จัดการทุกอย่าง)</SelectItem>
+            <SelectItem value="viewer">Viewer (ดูอย่างเดียว)</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
       <Button type="submit" className="w-full" disabled={submitting}>
         {submitting ? "กำลังบันทึก..." : "เพิ่มผู้ใช้"}
