@@ -34,10 +34,10 @@ export interface ServiceInput {
   category: string;
 }
 
-const BATCH_TIMEOUT_MS = 45_000;
-const CONCURRENCY = 3;
-const COOLDOWN_AFTER_TIMEOUT_MS = 10_000;
-const COOLDOWN_BETWEEN_CHUNKS_MS = 2_000;
+const BATCH_TIMEOUT_MS = 90_000;
+const CONCURRENCY = 2;
+const COOLDOWN_AFTER_TIMEOUT_MS = 3_000;
+const COOLDOWN_BETWEEN_CHUNKS_MS = 1_500;
 
 function raceTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -100,7 +100,7 @@ export function createModel() {
 
 export async function normalizeServices(
   services: ServiceInput[],
-  batchSize = 50,
+  batchSize = 25,
   onProgress?: (completed: number, total: number) => void,
   onBatchResult?: (results: NormalizedServiceData[]) => Promise<void>,
   onLog?: (message: string) => void
@@ -140,7 +140,7 @@ export async function normalizeServices(
 
     if (i + CONCURRENCY < batches.length) {
       if (hadTimeout) {
-        onLog?.(`Gemini rate limit detected, cooling down ${COOLDOWN_AFTER_TIMEOUT_MS / 1000}s...`);
+        onLog?.(`Batch timeout — รอ ${COOLDOWN_AFTER_TIMEOUT_MS / 1000}s แล้วทำต่อ...`);
         await new Promise((r) => setTimeout(r, COOLDOWN_AFTER_TIMEOUT_MS));
       } else {
         await new Promise((r) => setTimeout(r, COOLDOWN_BETWEEN_CHUNKS_MS));
