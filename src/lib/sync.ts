@@ -160,7 +160,17 @@ export async function syncProviderWithProgress(
           externalId: String(i),
           name: s.name,
           category: s.category,
-        }))
+        })),
+        50,
+        (completed, total) => {
+          onProgress({
+            type: "progress",
+            provider: provider.name,
+            current: completed,
+            total,
+            step: "ai",
+          });
+        }
       );
 
       onProgress({ type: "step", provider: provider.name, step: "ai_save", detail: `บันทึกผลวิเคราะห์ ${normalized.length} รายการ...` });

@@ -60,7 +60,8 @@ async function processSingleBatch(
 
 export async function normalizeServices(
   services: ServiceInput[],
-  batchSize = 50
+  batchSize = 50,
+  onProgress?: (completed: number, total: number) => void
 ): Promise<NormalizedServiceData[]> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
@@ -84,6 +85,7 @@ export async function normalizeServices(
 
   const concurrency = 5;
   const results: NormalizedServiceData[] = [];
+  let completedServices = 0;
 
   for (let i = 0; i < batches.length; i += concurrency) {
     const chunk = batches.slice(i, i + concurrency);
@@ -93,6 +95,9 @@ export async function normalizeServices(
     for (const r of chunkResults) {
       results.push(...r);
     }
+
+    completedServices += chunk.reduce((sum, b) => sum + b.batch.length, 0);
+    onProgress?.(completedServices, services.length);
 
     if (i + concurrency < batches.length) {
       await new Promise((r) => setTimeout(r, 300));
