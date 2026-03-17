@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,6 +50,20 @@ export default function ProvidersPage() {
   const [addOpen, setAddOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<Provider | null>(null);
 
+  // Sync progress state
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false);
+  const [syncStep, setSyncStep] = useState("");
+  const [syncProgress, setSyncProgress] = useState(0);
+  const [syncTotal, setSyncTotal] = useState(0);
+  const [syncProgressStep, setSyncProgressStep] = useState("");
+  const [syncLogs, setSyncLogs] = useState<{ time: string; msg: string; type: string }[]>([]);
+  const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [syncLogs]);
+
   const fetchProviders = () => {
     fetch("/api/providers")
       .then((r) => r.json())
@@ -61,6 +75,105 @@ export default function ProvidersPage() {
   useEffect(() => {
     fetchProviders();
   }, []);
+
+  const handleSync = async (provider: Provider) => {
+    setSyncingId(provider.id);
+    setSyncDialogOpen(true);
+    setSyncStep("กำลังเริ่ม...");
+    setSyncProgress(0);
+    setSyncTotal(0);
+    setSyncProgressStep("");
+    setSyncLogs([]);
+
+    const addLog = (msg: string, type = "info") => {
+      const time = new Date().toLocaleTimeString("th-TH");
+      setSyncLogs((prev) => [...prev.slice(-100), { time, msg, type }]);
+    };
+
+    addLog(`เริ่มซิงค์ ${provider.name}`);
+
+    try {
+      const res = await fetch("/api/sync/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id }),
+      });
+
+      if (!res.body) {
+        addLog("ไม่สามารถเชื่อมต่อ stream ได้", "error");
+        setSyncingId(null);
+        return;
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const dataLine = line.trim();
+          if (!dataLine.startsWith("data: ")) continue;
+
+          try {
+            const event = JSON.parse(dataLine.slice(6));
+
+            switch (event.type) {
+              case "step":
+                setSyncStep(event.detail);
+                addLog(event.detail);
+                break;
+              case "progress":
+                setSyncProgress(event.current);
+                setSyncTotal(event.total);
+                setSyncProgressStep(event.step);
+                break;
+              case "provider_done":
+                if (event.result.error) {
+                  addLog(`ผิดพลาด: ${event.result.error}`, "error");
+                } else {
+                  addLog(
+                    `สำเร็จ: ${event.result.servicesFound} บริการ, ${event.result.priceChanges} ราคาเปลี่ยน, ${event.result.normalized} วิเคราะห์ใหม่`,
+                    "success"
+                  );
+                }
+                break;
+              case "matching":
+                setSyncStep(event.detail);
+                addLog(event.detail);
+                break;
+              case "done":
+                addLog(
+                  `จับคู่ ${event.matchResult.matched} บริการ, กลุ่มใหม่ ${event.matchResult.newGroups}`,
+                  "success"
+                );
+                break;
+            }
+          } catch { /* skip */ }
+        }
+      }
+
+      toast.success(`ซิงค์ ${provider.name} เสร็จสิ้น`);
+      fetchProviders();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setSyncLogs((prev) => [
+        ...prev,
+        { time: new Date().toLocaleTimeString("th-TH"), msg: `เกิดข้อผิดพลาด: ${msg}`, type: "error" },
+      ]);
+      toast.error("ซิงค์ล้มเหลว");
+    } finally {
+      setSyncingId(null);
+    }
+  };
+
+  const syncPercent = syncTotal > 0 ? Math.round((syncProgress / syncTotal) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -110,6 +223,70 @@ export default function ProvidersPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Sync progress dialog */}
+      <Dialog open={syncDialogOpen} onOpenChange={(open) => { if (!syncingId) setSyncDialogOpen(open); }}>
+        <DialogContent className="sm:max-w-lg" showCloseButton={!syncingId}>
+          <DialogHeader>
+            <DialogTitle>
+              {syncingId ? "กำลังซิงค์..." : "ซิงค์เสร็จสิ้น"}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">{syncStep}</p>
+
+            {syncTotal > 0 && (
+              <div className="space-y-1">
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>
+                    {syncProgressStep === "upsert"
+                      ? `บันทึกบริการ ${syncProgress}/${syncTotal}`
+                      : syncProgressStep === "ai"
+                        ? `AI วิเคราะห์ ${syncProgress}/${syncTotal}`
+                        : syncProgressStep === "ai_save"
+                          ? `บันทึกผลวิเคราะห์ ${syncProgress}/${syncTotal}`
+                          : `${syncProgress}/${syncTotal}`}
+                  </span>
+                  <span>{syncPercent}%</span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{ width: `${syncPercent}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="max-h-48 overflow-y-auto rounded-lg bg-zinc-950 px-3 py-2 font-mono text-xs">
+              {syncLogs.map((log, i) => (
+                <div key={i} className="flex gap-2 py-0.5">
+                  <span className="shrink-0 text-zinc-500">{log.time}</span>
+                  <span
+                    className={
+                      log.type === "error"
+                        ? "text-red-400"
+                        : log.type === "success"
+                          ? "text-green-400"
+                          : "text-zinc-300"
+                    }
+                  >
+                    {log.type === "error" ? "✗ " : log.type === "success" ? "✓ " : ""}
+                    {log.msg}
+                  </span>
+                </div>
+              ))}
+              <div ref={logEndRef} />
+            </div>
+
+            {!syncingId && (
+              <Button className="w-full" onClick={() => setSyncDialogOpen(false)}>
+                ปิด
+              </Button>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Card>
         <CardHeader>
           <CardTitle>ผู้ให้บริการทั้งหมด</CardTitle>
@@ -148,6 +325,8 @@ export default function ProvidersPage() {
                     provider={provider}
                     onUpdate={fetchProviders}
                     onEdit={() => setEditTarget(provider)}
+                    onSync={() => handleSync(provider)}
+                    isSyncing={syncingId === provider.id}
                   />
                 ))}
               </TableBody>
@@ -163,38 +342,17 @@ function ProviderRow({
   provider,
   onUpdate,
   onEdit,
+  onSync,
+  isSyncing,
 }: {
   provider: Provider;
   onUpdate: () => void;
   onEdit: () => void;
+  onSync: () => void;
+  isSyncing: boolean;
 }) {
-  const [syncing, setSyncing] = useState(false);
   const healthStatus = provider.healthChecks[0]?.status || "unknown";
   const responseMs = provider.healthChecks[0]?.responseMs;
-
-  const handleSync = async () => {
-    setSyncing(true);
-    try {
-      const res = await fetch("/api/sync", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerId: provider.id }),
-      });
-      const data = await res.json();
-      if (data.error) {
-        toast.error(`ซิงค์ล้มเหลว: ${data.error}`);
-      } else {
-        toast.success(
-          `ซิงค์แล้ว ${data.servicesUpserted} บริการ, ราคาเปลี่ยน ${data.priceChanges} รายการ, วิเคราะห์ ${data.normalized} รายการ`
-        );
-        onUpdate();
-      }
-    } catch {
-      toast.error("ซิงค์ล้มเหลว");
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const handleDelete = async () => {
     if (!confirm(`ลบ ${provider.name} พร้อมข้อมูลบริการทั้งหมด?`)) return;
@@ -249,10 +407,10 @@ function ProviderRow({
           <Button
             variant="outline"
             size="sm"
-            onClick={handleSync}
-            disabled={syncing}
+            onClick={onSync}
+            disabled={isSyncing}
           >
-            {syncing ? "กำลังซิงค์..." : "ซิงค์"}
+            {isSyncing ? "กำลังซิงค์..." : "ซิงค์"}
           </Button>
           <Button variant="destructive" size="sm" onClick={handleDelete}>
             ลบ

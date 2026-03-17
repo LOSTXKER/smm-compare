@@ -5,21 +5,32 @@ import { requireAdmin } from "@/lib/api-auth";
 
 export const maxDuration = 300;
 
-export async function POST() {
+export async function POST(req: Request) {
   const denied = await requireAdmin();
   if (denied) return denied;
 
-  const providers = await prisma.provider.findMany({
-    where: { active: true },
-    orderBy: { createdAt: "asc" },
-  });
+  const body = await req.json().catch(() => ({}));
+  const { providerId } = body as { providerId?: string };
+
+  let providers;
+  if (providerId) {
+    const single = await prisma.provider.findUnique({ where: { id: providerId } });
+    providers = single ? [single] : [];
+  } else {
+    providers = await prisma.provider.findMany({
+      where: { active: true },
+      orderBy: { createdAt: "asc" },
+    });
+  }
 
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
     async start(controller) {
       function send(event: ProgressEvent) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        try {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        } catch { /* stream closed */ }
       }
 
       send({
@@ -60,7 +71,9 @@ export async function POST() {
         }
       }
 
-      send({ type: "matching", detail: "จับคู่บริการข้ามเว็บ..." });
+      if (!providerId) {
+        send({ type: "matching", detail: "จับคู่บริการข้ามเว็บ..." });
+      }
 
       try {
         const matchResult = await matchAndGroupServices();
