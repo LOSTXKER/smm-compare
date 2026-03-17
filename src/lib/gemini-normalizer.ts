@@ -34,10 +34,18 @@ interface ServiceInput {
   category: string;
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`Timeout: ${label} took longer than ${ms}ms`)), ms);
+    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
+
 async function processSingleBatch(
   model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
   batch: ServiceInput[],
-  batchLabel: string
+  batchLabel: string,
+  retries = 1
 ): Promise<NormalizedServiceData[]> {
   const input = batch.map((s) => ({
     externalId: s.externalId,
@@ -47,15 +55,29 @@ async function processSingleBatch(
 
   const prompt = `${SYSTEM_PROMPT}\n\nServices to classify:\n${JSON.stringify(input, null, 2)}`;
 
-  try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text();
-    const parsed = JSON.parse(text) as NormalizedServiceData[];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.error(`Gemini normalization failed for ${batchLabel}:`, err);
-    return [];
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const result = await withTimeout(
+        model.generateContent(prompt),
+        30_000,
+        batchLabel
+      );
+      const text = result.response.text();
+      const parsed = JSON.parse(text) as NormalizedServiceData[];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`${batchLabel} attempt ${attempt + 1} failed: ${msg}`);
+
+      if (attempt < retries) {
+        const backoff = 2000 * (attempt + 1);
+        console.log(`${batchLabel}: retrying in ${backoff}ms...`);
+        await new Promise((r) => setTimeout(r, backoff));
+      }
+    }
   }
+
+  return [];
 }
 
 export async function normalizeServices(
@@ -79,11 +101,11 @@ export async function normalizeServices(
   for (let i = 0; i < services.length; i += batchSize) {
     batches.push({
       batch: services.slice(i, i + batchSize),
-      label: `batch ${Math.floor(i / batchSize) + 1}`,
+      label: `batch ${Math.floor(i / batchSize) + 1}/${Math.ceil(services.length / batchSize)}`,
     });
   }
 
-  const concurrency = 5;
+  const concurrency = 2;
   const results: NormalizedServiceData[] = [];
   let completedServices = 0;
 
@@ -100,7 +122,7 @@ export async function normalizeServices(
     onProgress?.(completedServices, services.length);
 
     if (i + concurrency < batches.length) {
-      await new Promise((r) => setTimeout(r, 300));
+      await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
