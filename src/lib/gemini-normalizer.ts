@@ -35,7 +35,7 @@ export interface ServiceInput {
 }
 
 const BATCH_TIMEOUT_MS = 60_000;
-const CONCURRENCY = 2;
+const CONCURRENCY = 3;
 
 async function processSingleBatch(
   model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
