@@ -28,24 +28,20 @@ IMPORTANT RULES:
 Return ONLY valid JSON array. Each item must have ALL fields: externalId, platform, serviceType, quality, speed, refillDays, geoTarget, durationMinutes, watchDurationSec.
 Do not add any explanation or markdown formatting.`;
 
-interface ServiceInput {
+export interface ServiceInput {
   externalId: string;
   name: string;
   category: string;
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`Timeout: ${label} took longer than ${ms}ms`)), ms);
-    promise.then(resolve, reject).finally(() => clearTimeout(timer));
-  });
-}
+const BATCH_TIMEOUT_MS = 60_000;
+const CONCURRENCY = 2;
 
 async function processSingleBatch(
   model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
   batch: ServiceInput[],
   batchLabel: string,
-  retries = 1
+  retries = 2
 ): Promise<NormalizedServiceData[]> {
   const input = batch.map((s) => ({
     externalId: s.externalId,
@@ -56,28 +52,44 @@ async function processSingleBatch(
   const prompt = `${SYSTEM_PROMPT}\n\nServices to classify:\n${JSON.stringify(input, null, 2)}`;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
     try {
-      const result = await withTimeout(
-        model.generateContent(prompt),
-        60_000,
-        batchLabel
-      );
+      const result = await model.generateContent(prompt, {
+        timeout: BATCH_TIMEOUT_MS,
+        signal: controller.signal,
+      });
       const text = result.response.text();
       const parsed = JSON.parse(text) as NormalizedServiceData[];
       return Array.isArray(parsed) ? parsed : [];
     } catch (err) {
+      controller.abort();
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`${batchLabel} attempt ${attempt + 1} failed: ${msg}`);
+      console.error(`${batchLabel} attempt ${attempt + 1}/${retries + 1} failed: ${msg}`);
 
       if (attempt < retries) {
-        const backoff = 2000 * (attempt + 1);
+        const backoff = 3000 * (attempt + 1);
         console.log(`${batchLabel}: retrying in ${backoff}ms...`);
         await new Promise((r) => setTimeout(r, backoff));
       }
     }
   }
 
+  console.warn(`${batchLabel}: all attempts failed, skipping`);
   return [];
+}
+
+export function createModel() {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
+
+  const genAI = new GoogleGenerativeAI(apiKey);
+  return genAI.getGenerativeModel({
+    model: "gemini-2.0-flash",
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.1,
+    },
+  });
 }
 
 export async function normalizeServices(
@@ -86,17 +98,7 @@ export async function normalizeServices(
   onProgress?: (completed: number, total: number) => void,
   onBatchResult?: (results: NormalizedServiceData[]) => Promise<void>
 ): Promise<NormalizedServiceData[]> {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-
-  const genAI = new GoogleGenerativeAI(apiKey);
-  const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0.1,
-    },
-  });
+  const model = createModel();
 
   const batches: { batch: ServiceInput[]; label: string }[] = [];
   for (let i = 0; i < services.length; i += batchSize) {
@@ -106,12 +108,11 @@ export async function normalizeServices(
     });
   }
 
-  const concurrency = 2;
   const results: NormalizedServiceData[] = [];
   let completedServices = 0;
 
-  for (let i = 0; i < batches.length; i += concurrency) {
-    const chunk = batches.slice(i, i + concurrency);
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    const chunk = batches.slice(i, i + CONCURRENCY);
     const chunkResults = await Promise.all(
       chunk.map((b) => processSingleBatch(model, b.batch, b.label))
     );
@@ -125,7 +126,7 @@ export async function normalizeServices(
     completedServices += chunk.reduce((sum, b) => sum + b.batch.length, 0);
     onProgress?.(completedServices, services.length);
 
-    if (i + concurrency < batches.length) {
+    if (i + CONCURRENCY < batches.length) {
       await new Promise((r) => setTimeout(r, 1000));
     }
   }

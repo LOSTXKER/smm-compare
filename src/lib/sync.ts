@@ -131,20 +131,31 @@ export async function syncProviderWithProgress(
   onProgress({ type: "step", provider: provider.name, step: "price", detail: `บันทึกประวัติราคา (${priceUpdates.length} เปลี่ยน)...` });
   const { recorded } = await recordPriceChanges(priceUpdates);
 
-  const unnormalized = await prisma.rawService.findMany({
-    where: {
-      providerId: provider.id,
-      normalized: null,
-    },
-    select: { id: true, externalId: true, name: true, category: true },
-  });
-
   let normalizedCount = 0;
+  const MAX_AI_ROUNDS = 5;
 
-  if (unnormalized.length > 0) {
+  for (let round = 1; round <= MAX_AI_ROUNDS; round++) {
+    const unnormalized = await prisma.rawService.findMany({
+      where: { providerId: provider.id, normalized: null },
+      select: { id: true, externalId: true, name: true, category: true },
+    });
+
+    if (unnormalized.length === 0) {
+      if (round === 1) {
+        onProgress({ type: "step", provider: provider.name, step: "ai", detail: "ไม่มีบริการใหม่ที่ต้องวิเคราะห์" });
+      }
+      break;
+    }
+
     const serviceIds = unnormalized.map((s) => s.id);
+    const roundLabel = round > 1 ? ` (รอบที่ ${round})` : "";
 
-    onProgress({ type: "step", provider: provider.name, step: "ai", detail: `วิเคราะห์ ${unnormalized.length} บริการด้วย AI (2 พร้อมกัน, บันทึกทีละ batch)...` });
+    onProgress({
+      type: "step",
+      provider: provider.name,
+      step: "ai",
+      detail: `วิเคราะห์ ${unnormalized.length} บริการด้วย AI${roundLabel}...`,
+    });
 
     onProgress({
       type: "progress",
@@ -202,6 +213,7 @@ export async function syncProviderWithProgress(
       }
     };
 
+    let roundSaved = 0;
     try {
       await normalizeServices(
         unnormalized.map((s, i) => ({
@@ -222,20 +234,50 @@ export async function syncProviderWithProgress(
         async (batchResults) => {
           for (const norm of batchResults) {
             await saveNormResult(norm);
+            roundSaved++;
           }
           onProgress({
             type: "step",
             provider: provider.name,
             step: "ai_save",
-            detail: `บันทึกแล้ว ${normalizedCount}/${unnormalized.length} รายการ`,
+            detail: `บันทึกแล้ว ${normalizedCount} รายการ`,
           });
         }
       );
     } catch (err) {
-      console.error("Normalization error:", err instanceof Error ? err.message : err);
+      console.error(`Normalization round ${round} error:`, err instanceof Error ? err.message : err);
     }
-  } else {
-    onProgress({ type: "step", provider: provider.name, step: "ai", detail: "ไม่มีบริการใหม่ที่ต้องวิเคราะห์" });
+
+    if (roundSaved === 0) {
+      onProgress({
+        type: "step",
+        provider: provider.name,
+        step: "ai",
+        detail: `รอบที่ ${round}: ไม่สามารถวิเคราะห์เพิ่มได้ หยุดลอง`,
+      });
+      break;
+    }
+
+    const remaining = await prisma.rawService.count({
+      where: { providerId: provider.id, normalized: null },
+    });
+
+    if (remaining > 0 && round < MAX_AI_ROUNDS) {
+      onProgress({
+        type: "step",
+        provider: provider.name,
+        step: "ai",
+        detail: `เหลือ ${remaining} บริการที่ยังไม่ได้วิเคราะห์ → ลองอีกรอบอัตโนมัติ...`,
+      });
+      await new Promise((r) => setTimeout(r, 5000));
+    } else if (remaining > 0) {
+      onProgress({
+        type: "step",
+        provider: provider.name,
+        step: "ai",
+        detail: `เหลือ ${remaining} บริการที่ยังวิเคราะห์ไม่สำเร็จ (ครบ ${MAX_AI_ROUNDS} รอบแล้ว)`,
+      });
+    }
   }
 
   return {
