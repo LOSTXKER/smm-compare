@@ -121,54 +121,62 @@ export default function SyncPage() {
     setProgressStep("");
 
     let finalResult: SyncResult | null = null;
+    const MAX_RECONNECTS = 10;
 
-    try {
-      const res = await fetch("/api/sync/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerId: provider.id }),
-      });
-
-      if (!res.body) {
-        addLog(`${provider.name}: ไม่สามารถเชื่อมต่อ stream ได้`, "error");
-        return null;
+    for (let attempt = 0; attempt < MAX_RECONNECTS && !finalResult; attempt++) {
+      if (attempt > 0) {
+        addLog(`${provider.name}: เชื่อมต่อใหม่อัตโนมัติ (ครั้งที่ ${attempt})...`);
+        await new Promise((r) => setTimeout(r, 2000));
       }
 
-      await processSSE(res.body.getReader(), {
-        onStep: (event) => {
-          setCurrentDetail(event.detail);
-          if (event.step !== "start") addLog(event.detail);
-        },
-        onProgress: (event) => {
-          setProgressCurrent(event.current);
-          setProgressTotal(event.total);
-          setProgressStep(event.step);
-          if (event.step === "upsert") {
-            setCurrentDetail(`${event.provider}: บันทึกบริการ ${event.current}/${event.total}`);
-          } else if (event.step === "ai") {
-            setCurrentDetail(`${event.provider}: AI วิเคราะห์ ${event.current}/${event.total}`);
-          }
-        },
-        onProviderDone: (result) => {
-          finalResult = result;
-          setResults((prev) => [...prev, result]);
-          if (result.error) {
-            addLog(`✗ ${result.providerName}: ${result.error}`, "error");
-          } else {
-            addLog(
-              `✓ ${result.providerName}: สำเร็จ (${result.servicesFound} บริการ, ${result.priceChanges} ราคาเปลี่ยน, ${result.normalized} วิเคราะห์ใหม่)`,
-              "success"
-            );
-          }
-          setProgressCurrent(0);
-          setProgressTotal(0);
-        },
-        onMatching: () => {},
-        onDone: () => {},
-        onError: (msg) => addLog(msg, "error"),
-      });
-    } catch (err) {
-      addLog(`${provider.name}: ${err instanceof Error ? err.message : "เกิดข้อผิดพลาด"}`, "error");
+      try {
+        const res = await fetch("/api/sync/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerId: provider.id }),
+        });
+
+        if (!res.body) {
+          addLog(`${provider.name}: ไม่สามารถเชื่อมต่อ stream ได้`, "error");
+          continue;
+        }
+
+        await processSSE(res.body.getReader(), {
+          onStep: (event) => {
+            setCurrentDetail(event.detail);
+            if (event.step !== "start") addLog(event.detail);
+          },
+          onProgress: (event) => {
+            setProgressCurrent(event.current);
+            setProgressTotal(event.total);
+            setProgressStep(event.step);
+            if (event.step === "upsert") {
+              setCurrentDetail(`${event.provider}: บันทึกบริการ ${event.current}/${event.total}`);
+            } else if (event.step === "ai") {
+              setCurrentDetail(`${event.provider}: AI วิเคราะห์ ${event.current}/${event.total}`);
+            }
+          },
+          onProviderDone: (result) => {
+            finalResult = result;
+            setResults((prev) => [...prev, result]);
+            if (result.error) {
+              addLog(`✗ ${result.providerName}: ${result.error}`, "error");
+            } else {
+              addLog(
+                `✓ ${result.providerName}: สำเร็จ (${result.servicesFound} บริการ, ${result.priceChanges} ราคาเปลี่ยน, ${result.normalized} วิเคราะห์ใหม่)`,
+                "success"
+              );
+            }
+            setProgressCurrent(0);
+            setProgressTotal(0);
+          },
+          onMatching: () => {},
+          onDone: () => {},
+          onError: (msg) => addLog(msg, "error"),
+        });
+      } catch (err) {
+        addLog(`${provider.name}: connection lost - ${err instanceof Error ? err.message : "error"}`, "error");
+      }
     }
 
     return finalResult;

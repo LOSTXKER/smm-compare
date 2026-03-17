@@ -88,90 +88,103 @@ export default function ProvidersPage() {
 
     const addLog = (msg: string, type = "info") => {
       const time = new Date().toLocaleTimeString("th-TH");
-      setSyncLogs((prev) => [...prev.slice(-100), { time, msg, type }]);
+      setSyncLogs((prev) => [...prev.slice(-200), { time, msg, type }]);
     };
 
     addLog(`เริ่มซิงค์ ${provider.name}`);
 
-    try {
-      const res = await fetch("/api/sync/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ providerId: provider.id }),
-      });
+    const MAX_RECONNECTS = 10;
+    let completed = false;
 
-      if (!res.body) {
-        addLog("ไม่สามารถเชื่อมต่อ stream ได้", "error");
-        setSyncingId(null);
-        return;
+    for (let attempt = 0; attempt < MAX_RECONNECTS && !completed; attempt++) {
+      if (attempt > 0) {
+        addLog(`เชื่อมต่อใหม่อัตโนมัติ (ครั้งที่ ${attempt})...`, "info");
+        await new Promise((r) => setTimeout(r, 2000));
       }
 
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
+      try {
+        const res = await fetch("/api/sync/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerId: provider.id }),
+        });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        if (!res.body) {
+          addLog("ไม่สามารถเชื่อมต่อ stream ได้", "error");
+          continue;
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
 
-        for (const line of lines) {
-          const dataLine = line.trim();
-          if (!dataLine.startsWith("data: ")) continue;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-          try {
-            const event = JSON.parse(dataLine.slice(6));
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
 
-            switch (event.type) {
-              case "step":
-                setSyncStep(event.detail);
-                addLog(event.detail);
-                break;
-              case "progress":
-                setSyncProgress(event.current);
-                setSyncTotal(event.total);
-                setSyncProgressStep(event.step);
-                break;
-              case "provider_done":
-                if (event.result.error) {
-                  addLog(`ผิดพลาด: ${event.result.error}`, "error");
-                } else {
+          for (const line of lines) {
+            const dataLine = line.trim();
+            if (!dataLine.startsWith("data: ")) continue;
+
+            try {
+              const event = JSON.parse(dataLine.slice(6));
+
+              switch (event.type) {
+                case "step":
+                  setSyncStep(event.detail);
+                  addLog(event.detail);
+                  break;
+                case "progress":
+                  setSyncProgress(event.current);
+                  setSyncTotal(event.total);
+                  setSyncProgressStep(event.step);
+                  break;
+                case "provider_done":
+                  if (event.result.error) {
+                    addLog(`ผิดพลาด: ${event.result.error}`, "error");
+                  } else {
+                    addLog(
+                      `สำเร็จ: ${event.result.servicesFound} บริการ, ${event.result.priceChanges} ราคาเปลี่ยน, ${event.result.normalized} วิเคราะห์ใหม่`,
+                      "success"
+                    );
+                  }
+                  break;
+                case "matching":
+                  setSyncStep(event.detail);
+                  addLog(event.detail);
+                  break;
+                case "done":
                   addLog(
-                    `สำเร็จ: ${event.result.servicesFound} บริการ, ${event.result.priceChanges} ราคาเปลี่ยน, ${event.result.normalized} วิเคราะห์ใหม่`,
+                    `จับคู่ ${event.matchResult.matched} บริการ, กลุ่มใหม่ ${event.matchResult.newGroups}`,
                     "success"
                   );
-                }
-                break;
-              case "matching":
-                setSyncStep(event.detail);
-                addLog(event.detail);
-                break;
-              case "done":
-                addLog(
-                  `จับคู่ ${event.matchResult.matched} บริการ, กลุ่มใหม่ ${event.matchResult.newGroups}`,
-                  "success"
-                );
-                break;
-            }
-          } catch { /* skip */ }
+                  completed = true;
+                  break;
+              }
+            } catch { /* skip */ }
+          }
         }
-      }
 
-      toast.success(`ซิงค์ ${provider.name} เสร็จสิ้น`);
-      fetchProviders();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Unknown error";
-      setSyncLogs((prev) => [
-        ...prev,
-        { time: new Date().toLocaleTimeString("th-TH"), msg: `เกิดข้อผิดพลาด: ${msg}`, type: "error" },
-      ]);
-      toast.error("ซิงค์ล้มเหลว");
-    } finally {
-      setSyncingId(null);
+        if (completed) {
+          toast.success(`ซิงค์ ${provider.name} เสร็จสิ้น`);
+          fetchProviders();
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "Unknown error";
+        addLog(`Connection lost: ${msg}`, "error");
+      }
     }
+
+    if (!completed) {
+      addLog("ซิงค์เสร็จบางส่วน (กดซิงค์อีกครั้งเพื่อทำต่อ)", "info");
+      fetchProviders();
+    }
+
+    setSyncingId(null);
   };
 
   const syncPercent = syncTotal > 0 ? Math.round((syncProgress / syncTotal) * 100) : 0;
