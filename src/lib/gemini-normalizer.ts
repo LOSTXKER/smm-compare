@@ -34,15 +34,29 @@ export interface ServiceInput {
   category: string;
 }
 
-const BATCH_TIMEOUT_MS = 60_000;
+const BATCH_TIMEOUT_MS = 45_000;
 const CONCURRENCY = 3;
+const COOLDOWN_AFTER_TIMEOUT_MS = 10_000;
+const COOLDOWN_BETWEEN_CHUNKS_MS = 2_000;
+
+function raceTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`Timeout: ${label} exceeded ${ms}ms`));
+    }, ms);
+
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); }
+    );
+  });
+}
 
 async function processSingleBatch(
   model: ReturnType<GoogleGenerativeAI["getGenerativeModel"]>,
   batch: ServiceInput[],
-  batchLabel: string,
-  retries = 2
-): Promise<NormalizedServiceData[]> {
+  batchLabel: string
+): Promise<{ results: NormalizedServiceData[]; timedOut: boolean }> {
   const input = batch.map((s) => ({
     externalId: s.externalId,
     name: s.name,
@@ -51,31 +65,23 @@ async function processSingleBatch(
 
   const prompt = `${SYSTEM_PROMPT}\n\nServices to classify:\n${JSON.stringify(input, null, 2)}`;
 
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    const controller = new AbortController();
-    try {
-      const result = await model.generateContent(prompt, {
-        timeout: BATCH_TIMEOUT_MS,
-        signal: controller.signal,
-      });
-      const text = result.response.text();
-      const parsed = JSON.parse(text) as NormalizedServiceData[];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-      controller.abort();
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`${batchLabel} attempt ${attempt + 1}/${retries + 1} failed: ${msg}`);
-
-      if (attempt < retries) {
-        const backoff = 3000 * (attempt + 1);
-        console.log(`${batchLabel}: retrying in ${backoff}ms...`);
-        await new Promise((r) => setTimeout(r, backoff));
-      }
-    }
+  const controller = new AbortController();
+  try {
+    const result = await raceTimeout(
+      model.generateContent(prompt, { signal: controller.signal }),
+      BATCH_TIMEOUT_MS,
+      batchLabel
+    );
+    const text = result.response.text();
+    const parsed = JSON.parse(text) as NormalizedServiceData[];
+    return { results: Array.isArray(parsed) ? parsed : [], timedOut: false };
+  } catch (err) {
+    controller.abort();
+    const msg = err instanceof Error ? err.message : String(err);
+    const timedOut = msg.includes("Timeout") || msg.includes("aborted");
+    console.error(`${batchLabel} failed: ${msg}`);
+    return { results: [], timedOut };
   }
-
-  console.warn(`${batchLabel}: all attempts failed, skipping`);
-  return [];
 }
 
 export function createModel() {
@@ -96,7 +102,8 @@ export async function normalizeServices(
   services: ServiceInput[],
   batchSize = 50,
   onProgress?: (completed: number, total: number) => void,
-  onBatchResult?: (results: NormalizedServiceData[]) => Promise<void>
+  onBatchResult?: (results: NormalizedServiceData[]) => Promise<void>,
+  onLog?: (message: string) => void
 ): Promise<NormalizedServiceData[]> {
   const model = createModel();
 
@@ -116,10 +123,15 @@ export async function normalizeServices(
     const chunkResults = await Promise.all(
       chunk.map((b) => processSingleBatch(model, b.batch, b.label))
     );
-    for (const r of chunkResults) {
-      results.push(...r);
-      if (onBatchResult && r.length > 0) {
-        await onBatchResult(r);
+
+    let hadTimeout = false;
+    for (const cr of chunkResults) {
+      if (cr.timedOut) hadTimeout = true;
+      if (cr.results.length > 0) {
+        results.push(...cr.results);
+        if (onBatchResult) {
+          await onBatchResult(cr.results);
+        }
       }
     }
 
@@ -127,7 +139,12 @@ export async function normalizeServices(
     onProgress?.(completedServices, services.length);
 
     if (i + CONCURRENCY < batches.length) {
-      await new Promise((r) => setTimeout(r, 1000));
+      if (hadTimeout) {
+        onLog?.(`Gemini rate limit detected, cooling down ${COOLDOWN_AFTER_TIMEOUT_MS / 1000}s...`);
+        await new Promise((r) => setTimeout(r, COOLDOWN_AFTER_TIMEOUT_MS));
+      } else {
+        await new Promise((r) => setTimeout(r, COOLDOWN_BETWEEN_CHUNKS_MS));
+      }
     }
   }
 

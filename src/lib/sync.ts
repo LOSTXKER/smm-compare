@@ -242,6 +242,14 @@ export async function syncProviderWithProgress(
             step: "ai_save",
             detail: `บันทึกแล้ว ${normalizedCount} รายการ`,
           });
+        },
+        (logMsg) => {
+          onProgress({
+            type: "step",
+            provider: provider.name,
+            step: "ai",
+            detail: logMsg,
+          });
         }
       );
     } catch (err) {
