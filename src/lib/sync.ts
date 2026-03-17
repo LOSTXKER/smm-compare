@@ -144,7 +144,7 @@ export async function syncProviderWithProgress(
   if (unnormalized.length > 0) {
     const serviceIds = unnormalized.map((s) => s.id);
 
-    onProgress({ type: "step", provider: provider.name, step: "ai", detail: `วิเคราะห์ ${unnormalized.length} บริการด้วย AI (5 พร้อมกัน)...` });
+    onProgress({ type: "step", provider: provider.name, step: "ai", detail: `วิเคราะห์ ${unnormalized.length} บริการด้วย AI (2 พร้อมกัน, บันทึกทีละ batch)...` });
 
     onProgress({
       type: "progress",
@@ -154,8 +154,56 @@ export async function syncProviderWithProgress(
       step: "ai",
     });
 
+    const saveNormResult = async (norm: { externalId: string; platform: string; serviceType: string; quality: string | null; speed: string | null; refillDays: number | null; geoTarget: string | null; durationMinutes: number | null; watchDurationSec: number | null }) => {
+      const idx = parseInt(norm.externalId, 10);
+      const serviceId = !isNaN(idx) && idx >= 0 && idx < serviceIds.length
+        ? serviceIds[idx]
+        : null;
+
+      if (!serviceId) return;
+
+      const exists = await prisma.rawService.findUnique({
+        where: { id: serviceId },
+        select: { id: true },
+      });
+      if (!exists) return;
+
+      try {
+        const platform = norm.platform || "unknown";
+        const serviceType = norm.serviceType || "other";
+
+        await prisma.normalizedAttribute.upsert({
+          where: { serviceId },
+          update: {
+            platform,
+            serviceType,
+            quality: norm.quality ?? null,
+            speed: norm.speed ?? null,
+            refillDays: norm.refillDays ?? null,
+            geoTarget: norm.geoTarget ?? null,
+            durationMinutes: norm.durationMinutes ?? null,
+            watchDurationSec: norm.watchDurationSec ?? null,
+          },
+          create: {
+            service: { connect: { id: serviceId } },
+            platform,
+            serviceType,
+            quality: norm.quality ?? null,
+            speed: norm.speed ?? null,
+            refillDays: norm.refillDays ?? null,
+            geoTarget: norm.geoTarget ?? null,
+            durationMinutes: norm.durationMinutes ?? null,
+            watchDurationSec: norm.watchDurationSec ?? null,
+          },
+        });
+        normalizedCount++;
+      } catch (innerErr) {
+        console.error(`Norm save failed [${serviceId}]:`, innerErr instanceof Error ? innerErr.message : innerErr);
+      }
+    };
+
     try {
-      const normalized = await normalizeServices(
+      await normalizeServices(
         unnormalized.map((s, i) => ({
           externalId: String(i),
           name: s.name,
@@ -170,68 +218,19 @@ export async function syncProviderWithProgress(
             total,
             step: "ai",
           });
+        },
+        async (batchResults) => {
+          for (const norm of batchResults) {
+            await saveNormResult(norm);
+          }
+          onProgress({
+            type: "step",
+            provider: provider.name,
+            step: "ai_save",
+            detail: `บันทึกแล้ว ${normalizedCount}/${unnormalized.length} รายการ`,
+          });
         }
       );
-
-      onProgress({ type: "step", provider: provider.name, step: "ai_save", detail: `บันทึกผลวิเคราะห์ ${normalized.length} รายการ...` });
-
-      for (const norm of normalized) {
-        const idx = parseInt(norm.externalId, 10);
-        const serviceId = !isNaN(idx) && idx >= 0 && idx < serviceIds.length
-          ? serviceIds[idx]
-          : null;
-
-        if (!serviceId) continue;
-
-        const exists = await prisma.rawService.findUnique({
-          where: { id: serviceId },
-          select: { id: true },
-        });
-        if (!exists) continue;
-
-        try {
-          const platform = norm.platform || "unknown";
-          const serviceType = norm.serviceType || "other";
-
-          await prisma.normalizedAttribute.upsert({
-            where: { serviceId },
-            update: {
-              platform,
-              serviceType,
-              quality: norm.quality ?? null,
-              speed: norm.speed ?? null,
-              refillDays: norm.refillDays ?? null,
-              geoTarget: norm.geoTarget ?? null,
-              durationMinutes: norm.durationMinutes ?? null,
-              watchDurationSec: norm.watchDurationSec ?? null,
-            },
-            create: {
-              service: { connect: { id: serviceId } },
-              platform,
-              serviceType,
-              quality: norm.quality ?? null,
-              speed: norm.speed ?? null,
-              refillDays: norm.refillDays ?? null,
-              geoTarget: norm.geoTarget ?? null,
-              durationMinutes: norm.durationMinutes ?? null,
-              watchDurationSec: norm.watchDurationSec ?? null,
-            },
-          });
-          normalizedCount++;
-
-          if (normalizedCount % 50 === 0) {
-            onProgress({
-              type: "progress",
-              provider: provider.name,
-              current: normalizedCount,
-              total: normalized.length,
-              step: "ai_save",
-            });
-          }
-        } catch (innerErr) {
-          console.error(`Norm save failed [${serviceId}]:`, innerErr instanceof Error ? innerErr.message : innerErr);
-        }
-      }
     } catch (err) {
       console.error("Normalization error:", err instanceof Error ? err.message : err);
     }
